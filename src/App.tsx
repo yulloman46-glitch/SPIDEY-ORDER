@@ -13,6 +13,7 @@ import { SignUp } from "./components/SignUp";
 import { supabase } from "./supabaseClient";
 
 const LOCAL_STORAGE_ORDERS_KEY = "spidey_jersey_erp_orders_v1";
+const LOCAL_STORAGE_PRODUCTS_KEY = "spidey_jersey_erp_products_v1";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>(() => {
@@ -113,7 +114,21 @@ export default function App() {
     return initialOrders;
   });
 
-  const [products, setProducts] = useState<Product[]>(initialProducts);
+  // Initialize products state from LocalStorage if present, else fallback to initialProducts
+  const [products, setProducts] = useState<Product[]>(() => {
+    try {
+      const saved = localStorage.getItem(LOCAL_STORAGE_PRODUCTS_KEY);
+      if (saved !== null) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (err) {
+      console.error("Error reading products from localStorage:", err);
+    }
+    return initialProducts;
+  });
 
   // Synchronize orders state to LocalStorage on every state update (including deletions/additions)
   useEffect(() => {
@@ -123,6 +138,51 @@ export default function App() {
       console.error("Error persisting orders to localStorage:", err);
     }
   }, [orders]);
+
+  // Synchronize products state to LocalStorage on every update so refresh never wipes added products/images
+  useEffect(() => {
+    try {
+      localStorage.setItem(LOCAL_STORAGE_PRODUCTS_KEY, JSON.stringify(products));
+    } catch (err) {
+      console.error("Error persisting products to localStorage:", err);
+    }
+  }, [products]);
+
+  // Try fetching products from Supabase table 'SPIDEY' or 'products' for cross-device/multi-user sync
+  useEffect(() => {
+    async function syncProductsFromSupabase() {
+      try {
+        const { data: dbData, error } = await supabase.from("SPIDEY").select("*");
+        if (!error && dbData && dbData.length > 0) {
+          // Filter product entries or map items
+          const productRows = dbData.filter((row: any) => row.jerseyName || row.productCode || row.jersey_name);
+          if (productRows.length > 0) {
+            const formatted: Product[] = productRows.map((item: any) => ({
+              id: item.id ? String(item.id) : `p-${Date.now()}`,
+              productCode: item.productCode || item.product_code || "SKU-1001",
+              teamName: item.teamName || item.team_name || "Team",
+              jerseyName: item.jerseyName || item.jersey_name || "Jersey",
+              category: item.category || "Club",
+              price: Number(item.price) || 0,
+              stock: Number(item.stock) || 0,
+              lowStockThreshold: Number(item.lowStockThreshold || item.low_stock_threshold) || 10,
+              imageUrl: item.imageUrl || item.image_url || "",
+              sizesAvailable: Array.isArray(item.sizesAvailable || item.sizes_available)
+                ? item.sizesAvailable || item.sizes_available
+                : ["S", "M", "L", "XL", "XXL"],
+            }));
+            setProducts(formatted);
+          }
+        }
+      } catch (err) {
+        console.log("Supabase product sync notice:", err);
+      }
+    }
+
+    if (session) {
+      syncProductsFromSupabase();
+    }
+  }, [session]);
 
   // Restore sample orders helper
   const handleResetOrders = () => {

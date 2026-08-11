@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react";
 import { Product } from "../types";
+import { supabase } from "../supabaseClient";
 import {
   RefreshCw,
   Plus,
@@ -121,11 +122,43 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
       imageUrl: img,
     };
 
+    const finalProduct: Product = isNewProduct
+      ? { ...updatedProduct, id: "p-" + Date.now() }
+      : updatedProduct;
+
     if (isNewProduct) {
-      setProducts([...products, { ...updatedProduct, id: "p-" + Date.now() }]);
+      setProducts((prev) => [...prev, finalProduct]);
     } else {
-      setProducts(products.map((p) => (p.id === updatedProduct.id ? updatedProduct : p)));
+      setProducts((prev) => prev.map((p) => (p.id === finalProduct.id ? finalProduct : p)));
     }
+
+    // Sync product entry to Supabase database table
+    try {
+      supabase
+        .from("SPIDEY")
+        .upsert([
+          {
+            id: finalProduct.id,
+            productCode: finalProduct.productCode,
+            jerseyName: finalProduct.jerseyName,
+            teamName: finalProduct.teamName,
+            category: finalProduct.category,
+            price: finalProduct.price,
+            stock: finalProduct.stock,
+            lowStockThreshold: finalProduct.lowStockThreshold,
+            imageUrl: finalProduct.imageUrl,
+            sizesAvailable: finalProduct.sizesAvailable,
+          },
+        ])
+        .then(({ error }) => {
+          if (error) {
+            console.log("Supabase product upsert notice:", error.message);
+          }
+        });
+    } catch (err) {
+      console.log("Supabase product save error:", err);
+    }
+
     setEditingProduct(null);
   };
 
