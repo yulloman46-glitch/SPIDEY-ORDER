@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { auth } from "./firebaseClient";
 import { ERPOrder, Product } from "./types";
 import { initialOrders, initialProducts } from "./data/mockData";
 import { Navigation, NavTab } from "./components/Navigation";
@@ -10,7 +12,13 @@ import { ProductCatalog } from "./components/ProductCatalog";
 import { DTFNestingEngine } from "./components/DTFNestingEngine";
 import { SignIn } from "./components/SignIn";
 import { SignUp } from "./components/SignUp";
-import { supabase } from "./supabaseClient";
+import {
+  initFirebaseAuth,
+  subscribeFirebaseProducts,
+  subscribeFirebaseOrders,
+  saveOrderToFirebase,
+  saveProductToFirebase,
+} from "./services/firebaseService";
 
 const LOCAL_STORAGE_ORDERS_KEY = "spidey_jersey_erp_orders_v1";
 const LOCAL_STORAGE_PRODUCTS_KEY = "spidey_jersey_erp_products_v1";
@@ -46,26 +54,23 @@ export default function App() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
-  // Check active session using supabase.auth.getSession() and listen to changes
+  // Listen to Firebase Auth state changes
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUserEmail(session?.user?.email || null);
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser && !currentUser.isAnonymous) {
+        setUserEmail(currentUser.email);
+        setSession(currentUser);
+      } else {
+        setUserEmail(null);
+        setSession(null);
+      }
       setSessionChecked(true);
     });
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      setUserEmail(newSession?.user?.email || null);
-      setSessionChecked(true);
-    });
-
-    return () => {
-      authListener?.subscription.unsubscribe();
-    };
+    return () => unsubscribe();
   }, []);
 
-  // Protect private pages with supabase.auth.getSession(): if no session, redirect to /signin
+  // Protect private pages with Firebase Auth session: if no session, redirect to /signin
   useEffect(() => {
     if (!sessionChecked) return;
 
@@ -77,7 +82,11 @@ export default function App() {
   }, [session, sessionChecked, activeTab]);
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.warn("Sign out notice:", e);
+    }
     setSession(null);
     setUserEmail(null);
     setAuthNotice(null);
@@ -148,84 +157,47 @@ export default function App() {
     }
   }, [products]);
 
-  // Fetch products from Supabase table ('SPIDEY', 'spidey', 'products') for cross-device/multi-browser sync
+  // Firebase Firestore real-time initialization and subscription
   useEffect(() => {
-    async function syncProductsFromSupabase() {
-      try {
-        let dbData: any[] | null = null;
-
-        // 1) Try 'SPIDEY'
-        const res1 = await supabase.from("SPIDEY").select("*");
-        if (!res1.error && res1.data && res1.data.length > 0) {
-          dbData = res1.data;
-        } else {
-          // 2) Try 'spidey'
-          const res2 = await supabase.from("spidey").select("*");
-          if (!res2.error && res2.data && res2.data.length > 0) {
-            dbData = res2.data;
-          } else {
-            // 3) Try 'products'
-            const res3 = await supabase.from("products").select("*");
-            if (!res3.error && res3.data && res3.data.length > 0) {
-              dbData = res3.data;
+    initFirebaseAuth(() => {
+      // Auth ready, subscribe to real-time products stream
+      const unsubProducts = subscribeFirebaseProducts((fbProducts) => {
+        setProducts((prev) => {
+          const merged = [...prev];
+          fbProducts.forEach((fp) => {
+            const idx = merged.findIndex((p) => p.id === fp.id || (p.productCode && p.productCode === fp.productCode));
+            if (idx >= 0) {
+              merged[idx] = fp;
+            } else {
+              merged.push(fp);
             }
-          }
-        }
+          });
+          return merged;
+        });
+      });
 
-        if (dbData && dbData.length > 0) {
-          const productRows = dbData.filter((row: any) => row && (row.jerseyName || row.productCode || row.jersey_name || row.product_code || row.name || row.title || row.team || row.id));
-          if (productRows.length > 0) {
-            const fetchedProducts: Product[] = productRows.map((item: any, idx: number) => {
-              const rawSizes = item.sizesAvailable || item.sizes_available || item.sizes;
-              let parsedSizes = ["S", "M", "L", "XL", "XXL"];
-              if (Array.isArray(rawSizes)) {
-                parsedSizes = rawSizes;
-              } else if (typeof rawSizes === "string" && rawSizes.trim()) {
-                parsedSizes = rawSizes.split(",").map((s: string) => s.trim());
-              }
+      // Subscribe to real-time orders stream
+      const unsubOrders = subscribeFirebaseOrders((fbOrders) => {
+        setOrders((prev) => {
+          const merged = [...prev];
+          fbOrders.forEach((fo) => {
+            const idx = merged.findIndex((o) => o.id === fo.id);
+            if (idx >= 0) {
+              merged[idx] = fo;
+            } else {
+              merged.push(fo);
+            }
+          });
+          return merged;
+        });
+      });
 
-              return {
-                id: item.id ? String(item.id) : `p-cloud-${idx}-${Date.now()}`,
-                productCode: item.productCode || item.product_code || item.code || `SKU-${1000 + idx}`,
-                teamName: item.teamName || item.team_name || item.team || "Team",
-                jerseyName: item.jerseyName || item.jersey_name || item.name || item.title || "Jersey",
-                category: item.category || "Club",
-                price: Number(item.price) || 0,
-                stock: Number(item.stock) || 0,
-                lowStockThreshold: Number(item.lowStockThreshold || item.low_stock_threshold) || 10,
-                imageUrl: item.imageUrl || item.image_url || item.image || item.photo_url || "",
-                sizesAvailable: parsedSizes as any,
-              };
-            });
-
-            setProducts((prev) => {
-              const merged = [...prev];
-              fetchedProducts.forEach((fp) => {
-                const matchIndex = merged.findIndex(
-                  (p) => p.id === fp.id || (p.productCode && p.productCode === fp.productCode)
-                );
-                if (matchIndex >= 0) {
-                  merged[matchIndex] = fp;
-                } else {
-                  merged.push(fp);
-                }
-              });
-              try {
-                localStorage.setItem(LOCAL_STORAGE_PRODUCTS_KEY, JSON.stringify(merged));
-              } catch (e) {
-                console.error("LocalStorage save error:", e);
-              }
-              return merged;
-            });
-          }
-        }
-      } catch (err) {
-        console.log("Supabase product sync notice:", err);
-      }
-    }
-
-    syncProductsFromSupabase();
-  }, [session]);
+      return () => {
+        unsubProducts();
+        unsubOrders();
+      };
+    });
+  }, []);
 
   // Restore sample orders helper
   const handleResetOrders = () => {
@@ -237,11 +209,15 @@ export default function App() {
   // Add single order
   const handleAddSingleOrder = (newOrder: ERPOrder) => {
     setOrders((prev) => [newOrder, ...prev]);
+    saveOrderToFirebase(newOrder).catch((e) => console.log("Firebase order save notice:", e));
   };
 
   // Add bulk AI parsed orders
   const handleAddBulkOrders = (newOrders: ERPOrder[]) => {
     setOrders((prev) => [...newOrders, ...prev]);
+    newOrders.forEach((order) => {
+      saveOrderToFirebase(order).catch((e) => console.log("Firebase order save notice:", e));
+    });
   };
 
   // Count low stock products

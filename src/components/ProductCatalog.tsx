@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
 import { Product } from "../types";
-import { supabase } from "../supabaseClient";
+import { saveProductToFirebase, deleteProductFromFirebase, syncAllProductsToFirebase, uploadProductImage } from "../services/firebaseService";
 import {
   RefreshCw,
   Plus,
@@ -34,58 +34,65 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Handle image file selection with canvas image compression (keeps base64 < 80KB)
-  const handleImageFile = (file: File) => {
+  // Handle image file selection via Firebase Storage with canvas fallback
+  const handleImageFile = async (file: File) => {
     if (!file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const rawUrl = e.target?.result as string;
-      if (!rawUrl || !editingProduct) return;
+    if (!editingProduct) return;
 
-      // Compress image via HTML5 Canvas
-      const img = new Image();
-      img.src = rawUrl;
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        const MAX_WIDTH = 600;
-        const MAX_HEIGHT = 600;
-        let width = img.width;
-        let height = img.height;
+    const prodId = editingProduct.id || `temp-${Date.now()}`;
 
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height = Math.round((height * MAX_WIDTH) / width);
-            width = MAX_WIDTH;
+    try {
+      setSyncMessage("Uploading image to Firebase Storage...");
+      const downloadURL = await uploadProductImage(file, prodId);
+      setEditingProduct((prev) => (prev ? { ...prev, imageUrl: downloadURL } : null));
+      setSyncMessage("Image uploaded successfully to Firebase Storage!");
+      setTimeout(() => setSyncMessage(null), 3000);
+    } catch (err) {
+      console.warn("Firebase Storage upload fallback to compressed base64:", err);
+      // Fallback: Compress image via HTML5 Canvas
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const rawUrl = e.target?.result as string;
+        if (!rawUrl) return;
+
+        const img = new Image();
+        img.src = rawUrl;
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const MAX_WIDTH = 600;
+          const MAX_HEIGHT = 600;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height = Math.round((height * MAX_WIDTH) / width);
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width = Math.round((width * MAX_HEIGHT) / height);
+              height = MAX_HEIGHT;
+            }
           }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width = Math.round((width * MAX_HEIGHT) / height);
-            height = MAX_HEIGHT;
-          }
-        }
 
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.7);
-          setEditingProduct((prev) =>
-            prev ? { ...prev, imageUrl: compressedDataUrl } : null
-          );
-        } else {
-          setEditingProduct((prev) =>
-            prev ? { ...prev, imageUrl: rawUrl } : null
-          );
-        }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.7);
+            setEditingProduct((prev) => (prev ? { ...prev, imageUrl: compressedDataUrl } : null));
+          } else {
+            setEditingProduct((prev) => (prev ? { ...prev, imageUrl: rawUrl } : null));
+          }
+        };
+        img.onerror = () => {
+          setEditingProduct((prev) => (prev ? { ...prev, imageUrl: rawUrl } : null));
+        };
       };
-      img.onerror = () => {
-        if (editingProduct) {
-          setEditingProduct({ ...editingProduct, imageUrl: rawUrl });
-        }
-      };
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -171,160 +178,25 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
       setProducts((prev) => prev.map((p) => (p.id === finalProduct.id ? finalProduct : p)));
     }
 
-    // Sync product entry to Supabase database table with multi-schema fallback
-    syncProductToSupabase(finalProduct);
+    // Sync product entry to Firebase Firestore
+    saveProductToFirebase(finalProduct).catch((err) => console.log("Firebase product sync notice:", err));
 
     setEditingProduct(null);
   };
 
-  // Helper to sync single product to Supabase
-  const syncProductToSupabase = async (prod: Product) => {
+  // Manual sync with Firebase cloud
+  const handleSyncFirebaseCloud = async () => {
     setIsSyncing(true);
-    setSyncMessage("Syncing product to Supabase cloud...");
+    setSyncMessage("Syncing with Firebase Firestore cloud database...");
     try {
-      const numId = parseInt(prod.id.replace(/\D/g, ""), 10) || Math.floor(Math.random() * 1000000);
-      const user = (await supabase.auth.getUser())?.data?.user;
-
-      const snakeNumeric = {
-        id: numId,
-        product_code: prod.productCode,
-        jersey_name: prod.jerseyName,
-        team_name: prod.teamName,
-        category: prod.category,
-        price: prod.price,
-        stock: prod.stock,
-        low_stock_threshold: prod.lowStockThreshold,
-        image_url: prod.imageUrl,
-        sizes_available: prod.sizesAvailable,
-        user_id: user?.id,
-      };
-
-      const snakeString = {
-        ...snakeNumeric,
-        id: prod.id,
-      };
-
-      const snakeNoId = {
-        product_code: prod.productCode,
-        jersey_name: prod.jerseyName,
-        team_name: prod.teamName,
-        category: prod.category,
-        price: prod.price,
-        stock: prod.stock,
-        low_stock_threshold: prod.lowStockThreshold,
-        image_url: prod.imageUrl,
-        sizes_available: Array.isArray(prod.sizesAvailable) ? prod.sizesAvailable.join(",") : prod.sizesAvailable,
-        user_id: user?.id,
-      };
-
-      const camelNumeric = {
-        id: numId,
-        productCode: prod.productCode,
-        jerseyName: prod.jerseyName,
-        teamName: prod.teamName,
-        category: prod.category,
-        price: prod.price,
-        stock: prod.stock,
-        lowStockThreshold: prod.lowStockThreshold,
-        imageUrl: prod.imageUrl,
-        sizesAvailable: prod.sizesAvailable,
-        user_id: user?.id,
-      };
-
-      const camelString = {
-        ...camelNumeric,
-        id: prod.id,
-      };
-
-      const tables = ["SPIDEY", "spidey", "products"];
-      const payloads = [snakeNumeric, snakeString, snakeNoId, camelNumeric, camelString];
-
-      let success = false;
-      let lastErrMsg = "";
-
-      for (const table of tables) {
-        for (const payload of payloads) {
-          const { error } = await supabase.from(table).upsert([payload]);
-          if (!error) {
-            success = true;
-            break;
-          }
-          lastErrMsg = error.message;
-        }
-        if (success) break;
-      }
-
-      if (success) {
-        setSyncMessage("Product synced to Supabase database successfully!");
-      } else {
-        console.warn("Supabase save notice:", lastErrMsg);
-        setSyncMessage("Saved locally. Supabase notice: " + lastErrMsg);
-      }
+      await syncAllProductsToFirebase(products);
+      setSyncMessage("All products synchronized with Firebase Firestore!");
     } catch (err: any) {
-      console.error("Supabase error:", err);
-      setSyncMessage("Saved locally.");
+      console.error(err);
+      setSyncMessage("Cloud sync notice: " + (err?.message || "Saved locally"));
     } finally {
       setIsSyncing(false);
       setTimeout(() => setSyncMessage(null), 4000);
-    }
-  };
-
-  // Manual sync with Supabase cloud
-  const handleSyncSupabaseCloud = async () => {
-    setIsSyncing(true);
-    setSyncMessage("Syncing with Supabase cloud database...");
-    try {
-      // Push all local products to Supabase
-      for (const p of products) {
-        await syncProductToSupabase(p);
-      }
-
-      // Fetch fresh products from Supabase
-      let dbData: any[] | null = null;
-      const res1 = await supabase.from("SPIDEY").select("*");
-      if (!res1.error && res1.data && res1.data.length > 0) dbData = res1.data;
-      else {
-        const res2 = await supabase.from("spidey").select("*");
-        if (!res2.error && res2.data && res2.data.length > 0) dbData = res2.data;
-        else {
-          const res3 = await supabase.from("products").select("*");
-          if (!res3.error && res3.data && res3.data.length > 0) dbData = res3.data;
-        }
-      }
-
-      if (dbData && dbData.length > 0) {
-        const fetchedProducts: Product[] = dbData.map((item: any, idx: number) => {
-          const rawSizes = item.sizesAvailable || item.sizes_available || item.sizes;
-          let parsedSizes = ["S", "M", "L", "XL", "XXL"];
-          if (Array.isArray(rawSizes)) parsedSizes = rawSizes;
-          else if (typeof rawSizes === "string" && rawSizes.trim()) {
-            parsedSizes = rawSizes.split(",").map((s: string) => s.trim());
-          }
-          return {
-            id: item.id ? String(item.id) : `p-cloud-${idx}`,
-            productCode: item.productCode || item.product_code || item.code || `SKU-${1000 + idx}`,
-            teamName: item.teamName || item.team_name || item.team || "Team",
-            jerseyName: item.jerseyName || item.jersey_name || item.name || item.title || "Jersey",
-            category: item.category || "Club",
-            price: Number(item.price) || 0,
-            stock: Number(item.stock) || 0,
-            lowStockThreshold: Number(item.lowStockThreshold || item.low_stock_threshold) || 10,
-            imageUrl: item.imageUrl || item.image_url || item.image || item.photo_url || "",
-            sizesAvailable: parsedSizes as any,
-          };
-        });
-
-        setProducts(fetchedProducts);
-        setSyncMessage(`Successfully synced ${fetchedProducts.length} products with Supabase Cloud!`);
-      } else {
-        setSyncMessage("All products saved to Supabase Cloud!");
-      }
-    } catch (err: any) {
-      console.error(err);
-      setSyncMessage("Cloud sync complete.");
-    } finally {
-      setIsSyncing(false);
-      setTimeout(() => setSyncMessage(null), 5000);
     }
   };
 
@@ -338,20 +210,20 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
           </div>
           <h1 className="text-2xl font-black tracking-tight text-white">Product Catalog & Inventory</h1>
           <p className="text-slate-400 text-xs mt-1">
-            Manage soccer jerseys, stock counts, pricing, and sync directly across all devices with Supabase
+            Manage soccer jerseys, stock counts, pricing, and sync directly across all devices with Firebase
           </p>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
           {/* Cloud Sync Button */}
           <button
-            onClick={handleSyncSupabaseCloud}
+            onClick={handleSyncFirebaseCloud}
             disabled={isSyncing}
             className="px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-emerald-950/40 flex items-center gap-2"
-            title="Sync all products with Supabase cloud database"
+            title="Sync all products with Firebase Firestore cloud database"
           >
             <UploadCloud className={`w-4 h-4 ${isSyncing ? "animate-bounce" : ""}`} />
-            {isSyncing ? "Syncing Cloud..." : "Supabase Cloud Sync"}
+            {isSyncing ? "Syncing Cloud..." : "Firebase Cloud Sync"}
           </button>
 
           {/* Sync all from website button */}

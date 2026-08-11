@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Jersey catalog product item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productCode": { "type": "string" },
+        "teamName": { "type": "string" },
+        "jerseyName": { "type": "string" },
+        "category": { "type": "string" },
+        "price": { "type": "number" },
+        "stock": { "type": "number" },
+        "lowStockThreshold": { "type": "number" },
+        "imageUrl": { "type": "string" },
+        "sizesAvailable": { "type": "array" }
+      },
+      "required": ["jerseyName", "price"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "emailVerified": { "type": "boolean" },
+        "role": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "ERPOrder": {
+      "title": "ERPOrder",
+      "description": "Jersey production order",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerName": { "type": "string" },
+        "phone": { "type": "string" },
+        "addressBox1": { "type": "string" },
+        "addressBox2": { "type": "string" },
+        "items": { "type": "array" },
+        "status": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "totalAmount": { "type": "number" },
+        "codAmount": { "type": "number" },
+        "dueAmount": { "type": "number" },
+        "note": { "type": "string" },
+        "steadfastTracking": { "type": "string" },
+        "steadfastStatus": { "type": "string" },
+        "aiConfidence": { "type": "number" }
+      },
+      "required": ["customerName", "phone", "totalAmount"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Collection of jersey products"
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/ERPOrder" },
+      "description": "Collection of ERP production orders"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Collection of registered user profiles"
+    }
+  }
+}

@@ -1,5 +1,7 @@
 import React, { useState } from "react";
-import { supabase } from "../supabaseClient";
+import { createUserWithEmailAndPassword, sendEmailVerification } from "firebase/auth";
+import { auth } from "../firebaseClient";
+import { saveUserProfileToFirebase } from "../services/firebaseService";
 import { UserPlus, Mail, Lock, AlertCircle, ArrowRight, ShieldCheck, Loader2, CheckCircle2 } from "lucide-react";
 
 interface SignUpProps {
@@ -38,45 +40,43 @@ export const SignUp: React.FC<SignUpProps> = ({ onSuccess, onNavigateSignIn }) =
     setLoading(true);
 
     try {
-      // 1) For Sign Up: Use supabase.auth.signUp({ email, password })
-      const { data, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
+      // 1) Create Firebase user
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // 2) Send Firebase verification email
+      try {
+        await sendEmailVerification(user);
+      } catch (vErr) {
+        console.warn("Notice: Verification email send attempt:", vErr);
+      }
+
+      // 3) Store user profile data in Firestore (users/{uid})
+      await saveUserProfileToFirebase(user, {
+        role: "operator",
       });
 
-      if (authError) {
-        setError(authError.message || "Failed to sign up. Please try again.");
-      } else {
-        if (data?.session) {
-          // If a real session exists immediately (e.g. email confirmation disabled in Supabase)
-          setSuccessMsg("Account created successfully!");
-          setTimeout(() => {
-            window.history.pushState({}, "", "/");
-            window.dispatchEvent(new Event("popstate"));
-            if (onSuccess) {
-              onSuccess();
-            }
-          }, 600);
+      const confirmMsg = `Account created successfully! A confirmation email has been sent to ${email}. Please confirm your account before logging in.`;
+      setSuccessMsg(confirmMsg);
+
+      setTimeout(() => {
+        if (onNavigateSignIn) {
+          onNavigateSignIn(email, confirmMsg);
         } else {
-          // If data.session is null:
-          // Do NOT auto-login, do NOT redirect to dashboard.
-          // Show message: "Check your email and confirm your account before logging in."
-          // Redirect the user to the Sign In page with the pre-filled email.
-          const confirmMsg = "Check your email and confirm your account before logging in.";
-          setSuccessMsg(confirmMsg);
-          
-          setTimeout(() => {
-            if (onNavigateSignIn) {
-              onNavigateSignIn(email, confirmMsg);
-            } else {
-              window.history.pushState({}, "", "/signin");
-              window.dispatchEvent(new Event("popstate"));
-            }
-          }, 1000);
+          window.history.pushState({}, "", "/signin");
+          window.dispatchEvent(new Event("popstate"));
         }
-      }
+      }, 1500);
     } catch (err: any) {
-      setError(err?.message || "An unexpected error occurred during sign up.");
+      let friendlyError = err?.message || "Failed to sign up. Please try again.";
+      if (err?.code === "auth/email-already-in-use") {
+        friendlyError = "An account with this email address already exists. Please sign in instead.";
+      } else if (err?.code === "auth/invalid-email") {
+        friendlyError = "Please enter a valid email address.";
+      } else if (err?.code === "auth/weak-password") {
+        friendlyError = "Password is too weak. Please use at least 6 characters.";
+      }
+      setError(friendlyError);
     } finally {
       setLoading(false);
     }
@@ -148,7 +148,6 @@ export const SignUp: React.FC<SignUpProps> = ({ onSuccess, onNavigateSignIn }) =
             </div>
           </div>
 
-          {/* 4) Add simple error handling: If Supabase returns an error, show a small error message under the form */}
           {error && (
             <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800/80 text-rose-300 text-xs flex items-start gap-2 shadow-inner">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
@@ -202,7 +201,7 @@ export const SignUp: React.FC<SignUpProps> = ({ onSuccess, onNavigateSignIn }) =
 
         <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] text-slate-500">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-          <span>Secured with Supabase Authentication</span>
+          <span>Secured with Firebase Authentication</span>
         </div>
       </div>
     </div>
