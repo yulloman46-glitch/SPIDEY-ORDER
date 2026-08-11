@@ -1,6 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { onAuthStateChanged, signOut } from "firebase/auth";
-import { auth } from "./firebaseClient";
 import { ERPOrder, Product } from "./types";
 import { initialOrders, initialProducts } from "./data/mockData";
 import { Navigation, NavTab } from "./components/Navigation";
@@ -10,101 +8,27 @@ import { SingleOrderForm } from "./components/SingleOrderForm";
 import { AIChatParser } from "./components/AIChatParser";
 import { ProductCatalog } from "./components/ProductCatalog";
 import { DTFNestingEngine } from "./components/DTFNestingEngine";
-import { SignIn } from "./components/SignIn";
-import { SignUp } from "./components/SignUp";
+import { LockScreen } from "./components/LockScreen";
 import {
   initFirebaseAuth,
   subscribeFirebaseProducts,
   subscribeFirebaseOrders,
   saveOrderToFirebase,
-  saveProductToFirebase,
 } from "./services/firebaseService";
 
 const LOCAL_STORAGE_ORDERS_KEY = "spidey_jersey_erp_orders_v1";
 const LOCAL_STORAGE_PRODUCTS_KEY = "spidey_jersey_erp_products_v1";
+const UNLOCK_STORAGE_KEY = "spidey_erp_unlocked";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>(() => {
-    const path = window.location.pathname;
-    if (path === "/signin" || path === "/login") return "signin";
-    if (path === "/signup") return "signup";
-    return "dashboard";
+  const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
+  const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
+    return localStorage.getItem(UNLOCK_STORAGE_KEY) === "true";
   });
 
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [session, setSession] = useState<any>(null);
-  const [sessionChecked, setSessionChecked] = useState(false);
-  const [prefilledEmail, setPrefilledEmail] = useState<string>("");
-  const [authNotice, setAuthNotice] = useState<string | null>(null);
-
-  // Sync tab with browser URL history
-  useEffect(() => {
-    const handlePopState = () => {
-      const path = window.location.pathname;
-      if (path === "/signin" || path === "/login") {
-        setActiveTab("signin");
-      } else if (path === "/signup") {
-        setActiveTab("signup");
-      } else if (path === "/") {
-        setActiveTab("dashboard");
-      }
-    };
-
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
-
-  // Listen to Firebase Auth state changes
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser && !currentUser.isAnonymous) {
-        setUserEmail(currentUser.email);
-        setSession(currentUser);
-      } else {
-        setUserEmail(null);
-        setSession(null);
-      }
-      setSessionChecked(true);
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  // Protect private pages with Firebase Auth session: if no session, redirect to /signin
-  useEffect(() => {
-    if (!sessionChecked) return;
-
-    const isPublicTab = activeTab === "signin" || activeTab === "signup";
-    if (!session && !isPublicTab) {
-      setActiveTab("signin");
-      window.history.pushState({}, "", "/signin");
-    }
-  }, [session, sessionChecked, activeTab]);
-
-  const handleSignOut = async () => {
-    try {
-      await signOut(auth);
-    } catch (e) {
-      console.warn("Sign out notice:", e);
-    }
-    setSession(null);
-    setUserEmail(null);
-    setAuthNotice(null);
-    window.history.pushState({}, "", "/signin");
-    setActiveTab("signin");
-  };
-
-  const handleAuthSuccess = () => {
-    setAuthNotice(null);
-    window.history.pushState({}, "", "/");
-    setActiveTab("dashboard");
-  };
-
-  const handleNavigateToSignIn = (email?: string, message?: string) => {
-    if (email) setPrefilledEmail(email);
-    if (message) setAuthNotice(message);
-    setActiveTab("signin");
-    window.history.pushState({}, "", "/signin");
+  const handleLockApp = () => {
+    localStorage.removeItem(UNLOCK_STORAGE_KEY);
+    setIsUnlocked(false);
   };
 
   // Initialize orders state from LocalStorage if present, else fallback to initialOrders
@@ -223,45 +147,27 @@ export default function App() {
   // Count low stock products
   const lowStockCount = products.filter((p) => p.stock <= p.lowStockThreshold).length;
 
+  if (!isUnlocked) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0C] text-slate-200 font-sans antialiased selection:bg-red-600 selection:text-white flex items-center justify-center">
+        <LockScreen onUnlock={() => setIsUnlocked(true)} />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0A0A0C] text-slate-200 font-sans antialiased selection:bg-red-600 selection:text-white">
       {/* Header Navigation */}
       <Navigation
         activeTab={activeTab}
-        setActiveTab={(tab) => {
-          setActiveTab(tab);
-          if (tab === "signin") window.history.pushState({}, "", "/signin");
-          else if (tab === "signup") window.history.pushState({}, "", "/signup");
-          else if (tab === "dashboard") window.history.pushState({}, "", "/");
-        }}
+        setActiveTab={(tab) => setActiveTab(tab)}
         orderCount={orders.length}
         lowStockCount={lowStockCount}
-        userEmail={userEmail}
-        onSignOut={handleSignOut}
+        onLockApp={handleLockApp}
       />
 
       {/* Main Bento Grid View Container */}
       <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === "signin" && (
-          <SignIn
-            initialEmail={prefilledEmail}
-            infoNotice={authNotice}
-            onSuccess={handleAuthSuccess}
-            onNavigateSignUp={() => {
-              setAuthNotice(null);
-              setActiveTab("signup");
-              window.history.pushState({}, "", "/signup");
-            }}
-          />
-        )}
-
-        {activeTab === "signup" && (
-          <SignUp
-            onSuccess={handleAuthSuccess}
-            onNavigateSignIn={handleNavigateToSignIn}
-          />
-        )}
-
         {activeTab === "dashboard" && (
           <Dashboard
             orders={orders}

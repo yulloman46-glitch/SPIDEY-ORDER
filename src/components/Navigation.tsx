@@ -1,15 +1,14 @@
 import React from "react";
-import { LayoutDashboard, ShoppingBag, PlusCircle, Sparkles, Shirt, Printer, ShieldCheck, LogIn, UserPlus, LogOut, User } from "lucide-react";
+import { LayoutDashboard, ShoppingBag, PlusCircle, Sparkles, Shirt, Printer, ShieldCheck, Lock } from "lucide-react";
 
-export type NavTab = "dashboard" | "orders" | "new-order" | "ai-chat" | "products" | "dtf-nesting" | "signin" | "signup";
+export type NavTab = "dashboard" | "orders" | "new-order" | "ai-chat" | "products" | "dtf-nesting";
 
 interface NavigationProps {
   activeTab: NavTab;
   setActiveTab: (tab: NavTab) => void;
   orderCount: number;
   lowStockCount: number;
-  userEmail?: string | null;
-  onSignOut?: () => void;
+  onLockApp?: () => void;
 }
 
 export const Navigation: React.FC<NavigationProps> = ({
@@ -17,8 +16,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   setActiveTab,
   orderCount,
   lowStockCount,
-  userEmail,
-  onSignOut,
+  onLockApp,
 }) => {
   return (
     <header className="bg-[#111116] border-b border-slate-800 text-slate-200 sticky top-0 z-40 shadow-xl">
@@ -137,54 +135,15 @@ export const Navigation: React.FC<NavigationProps> = ({
               </span>
             </div>
 
-            {userEmail ? (
-              <div className="flex items-center gap-2 bg-[#16161E] px-3 py-1.5 rounded-xl border border-slate-800">
-                <User className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                <span className="text-xs font-bold text-slate-200 truncate max-w-[140px]">
-                  {userEmail}
-                </span>
-                {onSignOut && (
-                  <button
-                    onClick={onSignOut}
-                    className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors ml-1"
-                    title="Sign Out"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center space-x-1.5">
-                <button
-                  onClick={() => {
-                    setActiveTab("signin");
-                    window.history.pushState({}, "", "/signin");
-                  }}
-                  className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                    activeTab === "signin"
-                      ? "bg-red-600 text-white shadow-md"
-                      : "bg-[#16161E] text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800"
-                  }`}
-                >
-                  <LogIn className="w-3.5 h-3.5" />
-                  <span>Sign In</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setActiveTab("signup");
-                    window.history.pushState({}, "", "/signup");
-                  }}
-                  className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                    activeTab === "signup"
-                      ? "bg-red-600 text-white shadow-md"
-                      : "bg-red-950/40 text-red-300 hover:bg-red-900/60 border border-red-800/50"
-                  }`}
-                >
-                  <UserPlus className="w-3.5 h-3.5" />
-                  <span>Sign Up</span>
-                </button>
-              </div>
+            {onLockApp && (
+              <button
+                onClick={onLockApp}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#16161E] hover:bg-red-950/40 text-slate-300 hover:text-red-300 border border-slate-800 hover:border-red-800/50 transition-all cursor-pointer"
+                title="Lock ERP Control Gate"
+              >
+                <Lock className="w-3.5 h-3.5 text-red-500" />
+                <span>Lock ERP</span>
+              </button>
             )}
           </div>
         </div>
@@ -240,31 +199,13 @@ export const Navigation: React.FC<NavigationProps> = ({
             DTF Engine 39"
           </button>
 
-          {!userEmail && (
-            <>
-              <button
-                onClick={() => {
-                  setActiveTab("signin");
-                  window.history.pushState({}, "", "/signin");
-                }}
-                className={`px-3 py-1.5 rounded-lg whitespace-nowrap ${
-                  activeTab === "signin" ? "bg-red-600 text-white font-bold" : "text-slate-300 bg-slate-900"
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                onClick={() => {
-                  setActiveTab("signup");
-                  window.history.pushState({}, "", "/signup");
-                }}
-                className={`px-3 py-1.5 rounded-lg whitespace-nowrap ${
-                  activeTab === "signup" ? "bg-red-600 text-white font-bold" : "text-slate-300 bg-slate-900"
-                }`}
-              >
-                Sign Up
-              </button>
-            </>
+          {onLockApp && (
+            <button
+              onClick={onLockApp}
+              className="px-3 py-1.5 rounded-lg whitespace-nowrap bg-red-950/50 text-red-300 font-bold border border-red-800/40"
+            >
+              Lock ERP
+            </button>
           )}
         </div>
       </div>
