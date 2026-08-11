@@ -1,6 +1,10 @@
 import React, { useState, useRef } from "react";
 import { Product } from "../types";
-import { saveProductToFirebase, deleteProductFromFirebase, syncAllProductsToFirebase, uploadProductImage } from "../services/firebaseService";
+import {
+  saveProductToFirebase,
+  deleteProductFromFirebase,
+  syncAllProductsToFirebase,
+} from "../services/firebaseService";
 import {
   RefreshCw,
   Plus,
@@ -34,65 +38,21 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Handle image file selection via Firebase Storage with canvas fallback
-  const handleImageFile = async (file: File) => {
-    if (!file.type.startsWith("image/")) return;
+  // Fast & instant image selection via URL.createObjectURL
+  const handleUploadedFile = (file: File) => {
     if (!editingProduct) return;
 
-    const prodId = editingProduct.id || `temp-${Date.now()}`;
-
-    try {
-      setSyncMessage("Uploading image to Firebase Storage...");
-      const downloadURL = await uploadProductImage(file, prodId);
-      setEditingProduct((prev) => (prev ? { ...prev, imageUrl: downloadURL } : null));
-      setSyncMessage("Image uploaded successfully to Firebase Storage!");
+    if (!file.type.startsWith("image/") && !/\.(png|jpg|jpeg|webp|svg|gif|bmp|jfif|avif|heic)$/i.test(file.name)) {
+      setSyncMessage("Please select a valid image file.");
       setTimeout(() => setSyncMessage(null), 3000);
-    } catch (err) {
-      console.warn("Firebase Storage upload fallback to compressed base64:", err);
-      // Fallback: Compress image via HTML5 Canvas
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const rawUrl = e.target?.result as string;
-        if (!rawUrl) return;
-
-        const img = new Image();
-        img.src = rawUrl;
-        img.onload = () => {
-          const canvas = document.createElement("canvas");
-          const MAX_WIDTH = 600;
-          const MAX_HEIGHT = 600;
-          let width = img.width;
-          let height = img.height;
-
-          if (width > height) {
-            if (width > MAX_WIDTH) {
-              height = Math.round((height * MAX_WIDTH) / width);
-              width = MAX_WIDTH;
-            }
-          } else {
-            if (height > MAX_HEIGHT) {
-              width = Math.round((width * MAX_HEIGHT) / height);
-              height = MAX_HEIGHT;
-            }
-          }
-
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext("2d");
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, width, height);
-            const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.7);
-            setEditingProduct((prev) => (prev ? { ...prev, imageUrl: compressedDataUrl } : null));
-          } else {
-            setEditingProduct((prev) => (prev ? { ...prev, imageUrl: rawUrl } : null));
-          }
-        };
-        img.onerror = () => {
-          setEditingProduct((prev) => (prev ? { ...prev, imageUrl: rawUrl } : null));
-        };
-      };
-      reader.readAsDataURL(file);
+      return;
     }
+
+    // Create an instant blob object URL preview - zero delay!
+    const objectUrl = URL.createObjectURL(file);
+    setEditingProduct((prev) => (prev ? { ...prev, imageUrl: objectUrl } : null));
+    setSyncMessage("Image selected instantly!");
+    setTimeout(() => setSyncMessage(null), 2500);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -109,7 +69,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleImageFile(e.dataTransfer.files[0]);
+      handleUploadedFile(e.dataTransfer.files[0]);
     }
   };
 
@@ -122,7 +82,6 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
       const data = await res.json();
       if (data.success) {
         setSyncMessage(`Synced ${data.syncedCount} items from WooCommerce at ${new Date(data.syncedAt).toLocaleTimeString()}`);
-        // Refresh product stock levels with small random increments
         setProducts((prev) =>
           prev.map((p) => ({
             ...p,
@@ -150,15 +109,17 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
     return matchesSearch && matchesCat;
   });
 
-  // Save product edit
+  // Save product edit/addition
   const handleSaveProduct = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProduct) return;
 
-    const code = editingProduct.productCode?.trim() || "SKU-" + Math.floor(1000 + Math.random() * 9000);
-    const name = editingProduct.jerseyName?.trim() || "New Team Jersey";
-    const team = editingProduct.teamName?.trim() || name.split(" ")[0] || "Club";
-    const img = editingProduct.imageUrl?.trim() || "https://images.unsplash.com/photo-1577223625816-7546f13df25d?auto=format&fit=crop&w=400&q=80";
+    const code = editingProduct.productCode?.trim().toUpperCase() || "SKU-" + Math.floor(1000 + Math.random() * 9000);
+    const name = editingProduct.jerseyName?.trim() || "New Jersey Edition";
+    const team = editingProduct.teamName?.trim() || name.split(" ")[0] || "Club Team";
+    const img =
+      editingProduct.imageUrl?.trim() ||
+      "https://images.unsplash.com/photo-1577223625816-7546f13df25d?auto=format&fit=crop&w=400&q=80";
 
     const updatedProduct: Product = {
       ...editingProduct,
@@ -166,14 +127,22 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
       jerseyName: name,
       teamName: team,
       imageUrl: img,
+      price: Number(editingProduct.price) || 1800,
+      stock: Number(editingProduct.stock) >= 0 ? Number(editingProduct.stock) : 20,
+      lowStockThreshold: Number(editingProduct.lowStockThreshold) >= 0 ? Number(editingProduct.lowStockThreshold) : 5,
+      sizesAvailable:
+        editingProduct.sizesAvailable && editingProduct.sizesAvailable.length > 0
+          ? editingProduct.sizesAvailable
+          : ["S", "M", "L", "XL", "XXL"],
+      category: editingProduct.category || "Club",
     };
 
     const finalProduct: Product = isNewProduct
-      ? { ...updatedProduct, id: "p-" + Date.now() }
+      ? { ...updatedProduct, id: updatedProduct.id || "p-" + Date.now() }
       : updatedProduct;
 
     if (isNewProduct) {
-      setProducts((prev) => [...prev, finalProduct]);
+      setProducts((prev) => [finalProduct, ...prev]);
     } else {
       setProducts((prev) => prev.map((p) => (p.id === finalProduct.id ? finalProduct : p)));
     }
@@ -181,7 +150,21 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
     // Sync product entry to Firebase Firestore
     saveProductToFirebase(finalProduct).catch((err) => console.log("Firebase product sync notice:", err));
 
+    setSyncMessage(`Product "${finalProduct.jerseyName}" saved successfully!`);
     setEditingProduct(null);
+    setTimeout(() => setSyncMessage(null), 3000);
+  };
+
+  // Delete product
+  const handleDeleteProduct = async (productId: string) => {
+    if (!window.confirm("Are you sure you want to delete this jersey product from inventory?")) return;
+
+    setProducts((prev) => prev.filter((p) => p.id !== productId));
+    await deleteProductFromFirebase(productId).catch((err) => console.log("Firebase delete notice:", err));
+
+    setEditingProduct(null);
+    setSyncMessage("Product deleted from catalog.");
+    setTimeout(() => setSyncMessage(null), 3000);
   };
 
   // Manual sync with Firebase cloud
@@ -219,7 +202,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
           <button
             onClick={handleSyncFirebaseCloud}
             disabled={isSyncing}
-            className="px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-emerald-950/40 flex items-center gap-2"
+            className="px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-emerald-950/40 flex items-center gap-2 cursor-pointer"
             title="Sync all products with Firebase Firestore cloud database"
           >
             <UploadCloud className={`w-4 h-4 ${isSyncing ? "animate-bounce" : ""}`} />
@@ -230,7 +213,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
           <button
             onClick={handleSyncWooCommerce}
             disabled={isSyncing}
-            className="px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-blue-900/40 flex items-center gap-2"
+            className="px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-blue-900/40 flex items-center gap-2 cursor-pointer"
           >
             <RefreshCw className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`} />
             {isSyncing ? "Syncing..." : "Sync Website"}
@@ -240,19 +223,19 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
             onClick={() => {
               setIsNewProduct(true);
               setEditingProduct({
-                id: "",
-                productCode: "RM24H",
-                teamName: "Real Madrid",
-                jerseyName: "Real Madrid Home 24/25 Player Edition",
+                id: `p-${Date.now()}`,
+                productCode: "",
+                teamName: "",
+                jerseyName: "",
                 category: "Club",
-                price: 2200,
-                stock: 25,
-                lowStockThreshold: 10,
-                imageUrl: "https://images.unsplash.com/photo-1577223625816-7546f13df25d?auto=format&fit=crop&w=400&q=80",
-                sizesAvailable: ["S", "M", "L", "XL", "XXL", "3XL"],
+                price: 1800,
+                stock: 20,
+                lowStockThreshold: 5,
+                imageUrl: "",
+                sizesAvailable: ["S", "M", "L", "XL", "XXL"],
               });
             }}
-            className="px-3.5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-all shadow-md flex items-center gap-1.5"
+            className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-red-950/50 flex items-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-4 h-4" /> Add Product
           </button>
@@ -260,9 +243,9 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
       </div>
 
       {syncMessage && (
-        <div className="bg-blue-950/50 border border-blue-800 p-4 rounded-xl text-blue-300 text-xs font-bold flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-blue-400" />
-          {syncMessage}
+        <div className="bg-blue-950/80 border border-blue-700/80 p-4 rounded-xl text-blue-200 text-xs font-bold flex items-center gap-2 shadow-lg animate-fade-in">
+          <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0" />
+          <span>{syncMessage}</span>
         </div>
       )}
 
@@ -274,7 +257,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
                 selectedCategory === cat
                   ? "bg-red-600 text-white shadow-md"
                   : "bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800"
@@ -309,12 +292,20 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
             >
               <div>
                 {/* Product Image Box */}
-                <div className="h-44 bg-slate-900 relative overflow-hidden">
-                  <img
-                    src={prod.imageUrl}
-                    alt={prod.jerseyName}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                  />
+                <div className="h-44 bg-slate-900 relative overflow-hidden flex items-center justify-center">
+                  {prod.imageUrl ? (
+                    <img
+                      src={prod.imageUrl}
+                      alt={prod.jerseyName}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-slate-600">
+                      <Shirt className="w-12 h-12 mb-1" />
+                      <span className="text-[10px] font-bold">No Image Attached</span>
+                    </div>
+                  )}
+
                   <div className="absolute top-3 left-3 bg-slate-950/80 backdrop-blur-sm text-white px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider border border-slate-800 flex items-center gap-1">
                     <Tag className="w-3 h-3 text-red-400" />
                     {prod.category}
@@ -344,7 +335,9 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
 
                   <div className="flex items-center gap-1 text-[11px] text-slate-400 pt-1">
                     <span className="font-semibold text-slate-400">Sizes:</span>
-                    <span className="font-mono text-slate-200 font-bold">{prod.sizesAvailable.join(", ")}</span>
+                    <span className="font-mono text-slate-200 font-bold">
+                      {Array.isArray(prod.sizesAvailable) ? prod.sizesAvailable.join(", ") : prod.sizesAvailable}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -373,7 +366,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
                       setIsNewProduct(false);
                       setEditingProduct(prod);
                     }}
-                    className="p-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:border-red-500 transition-colors shadow-2xs"
+                    className="p-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:border-red-500 transition-colors shadow-2xs cursor-pointer"
                     title="Edit Product"
                   >
                     <Edit3 className="w-4 h-4" />
@@ -385,10 +378,10 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
         })}
       </div>
 
-      {/* Streamlined Add/Edit Product Modal */}
+      {/* Streamlined Add / Edit Product Modal - Clean 3-Field Form */}
       {editingProduct && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#16161E] rounded-2xl max-w-lg w-full p-6 space-y-6 shadow-2xl border border-slate-800">
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-[#16161E] rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl border border-slate-800 my-8">
             {/* Modal Header */}
             <div className="flex justify-between items-center border-b border-slate-800 pb-3">
               <h3 className="text-lg font-black text-white flex items-center gap-2">
@@ -397,18 +390,18 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
               </h3>
               <button
                 onClick={() => setEditingProduct(null)}
-                className="p-1.5 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                className="p-1.5 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveProduct} className="space-y-5 text-xs">
-              {/* 1. Product Code */}
+            <form onSubmit={handleSaveProduct} className="space-y-4 text-xs">
+              {/* 1. Product Code Input */}
               <div>
                 <label className="block font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
                   <Barcode className="w-4 h-4 text-red-400" />
-                  Product Code
+                  Product Code / SKU
                 </label>
                 <input
                   type="text"
@@ -425,11 +418,37 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
                 />
               </div>
 
-              {/* 2. Product Image Box / Drag-and-Drop Area with Thumbnail Preview */}
+              {/* 2. Product Name Input */}
               <div>
                 <label className="block font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
-                  <ImageIcon className="w-4 h-4 text-red-400" />
-                  Product Image
+                  <Shirt className="w-4 h-4 text-red-400" />
+                  Product Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g., Real Madrid Home 24/25 Jersey"
+                  value={editingProduct.jerseyName || ""}
+                  onChange={(e) =>
+                    setEditingProduct({
+                      ...editingProduct,
+                      jerseyName: e.target.value,
+                    })
+                  }
+                  className="w-full p-3 rounded-xl border border-slate-800 bg-slate-900 font-semibold text-white text-xs focus:ring-2 focus:ring-red-500/40 focus:border-red-500 outline-none"
+                />
+              </div>
+
+              {/* 3. Product Image File Input with Instant Local Preview */}
+              <div>
+                <label className="block font-bold text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <ImageIcon className="w-4 h-4 text-red-400" />
+                    Product Image
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-normal">
+                    Select image for instant local preview
+                  </span>
                 </label>
 
                 {/* Hidden File Input */}
@@ -440,8 +459,9 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
                   className="hidden"
                   onChange={(e) => {
                     if (e.target.files && e.target.files[0]) {
-                      handleImageFile(e.target.files[0]);
+                      handleUploadedFile(e.target.files[0]);
                     }
+                    e.target.value = "";
                   }}
                 />
 
@@ -449,25 +469,25 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
-                  className={`border-2 border-dashed rounded-xl p-4 text-center transition-all ${
+                  className={`border-2 border-dashed rounded-2xl p-4 text-center transition-all ${
                     isDragging
-                      ? "border-red-500 bg-red-950/20"
+                      ? "border-red-500 bg-red-950/30"
                       : "border-slate-800 bg-slate-900/60 hover:border-slate-700"
                   }`}
                 >
                   {editingProduct.imageUrl ? (
                     <div className="space-y-3">
-                      {/* Thumbnail Preview */}
+                      {/* Instant Preview */}
                       <div className="relative group max-w-xs mx-auto">
                         <img
                           src={editingProduct.imageUrl}
                           alt="Jersey Preview"
-                          className="h-36 w-full object-contain rounded-lg bg-slate-950 border border-slate-800 p-1"
+                          className="h-44 w-full object-contain rounded-xl bg-slate-950 border border-slate-800 p-1"
                         />
                         <button
                           type="button"
                           onClick={() => setEditingProduct({ ...editingProduct, imageUrl: "" })}
-                          className="absolute top-2 right-2 p-1.5 bg-rose-600/90 text-white rounded-lg hover:bg-rose-500 transition-colors shadow-md"
+                          className="absolute top-2 right-2 p-1.5 bg-rose-600/90 text-white rounded-lg hover:bg-rose-500 transition-colors shadow-md cursor-pointer"
                           title="Remove Image"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -478,9 +498,9 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
                         <button
                           type="button"
                           onClick={() => fileInputRef.current?.click()}
-                          className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-lg text-xs border border-slate-700 flex items-center gap-1.5 transition-colors"
+                          className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs border border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
                         >
-                          <UploadCloud className="w-3.5 h-3.5 text-red-400" />
+                          <UploadCloud className="w-4 h-4 text-red-400" />
                           Change Image File
                         </button>
                       </div>
@@ -495,67 +515,61 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
                       </div>
                       <div>
                         <span className="font-bold text-white text-xs block">
-                          Drag & drop jersey image here, or <span className="text-red-400 underline">browse</span>
+                          Click or drag & drop downloaded jersey image
                         </span>
                         <span className="text-[10px] text-slate-400 block mt-0.5">
-                          Supports PNG, JPG, WebP images
+                          Instant local preview (Supports PNG, JPG, WEBP, SVG)
                         </span>
                       </div>
                     </div>
                   )}
 
-                  {/* Fallback Image URL Input */}
+                  {/* Fallback Image Web Link (URL) */}
                   <div className="mt-3 pt-3 border-t border-slate-800/80 text-left">
                     <span className="text-[10px] font-bold text-slate-400 block mb-1 uppercase tracking-wider">
-                      Or paste image web link (URL):
+                      Or paste image web URL:
                     </span>
                     <input
                       type="url"
                       placeholder="https://images.unsplash.com/..."
-                      value={editingProduct.imageUrl}
+                      value={editingProduct.imageUrl || ""}
                       onChange={(e) => setEditingProduct({ ...editingProduct, imageUrl: e.target.value })}
-                      className="w-full p-2 rounded-lg border border-slate-800 bg-slate-900 text-slate-300 font-mono text-[11px] focus:ring-1 focus:ring-red-500 focus:border-red-500"
+                      className="w-full p-2.5 rounded-xl border border-slate-800 bg-slate-950 text-slate-300 font-mono text-xs focus:ring-1 focus:ring-red-500 focus:border-red-500 outline-none"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* 3. Product Name */}
-              <div>
-                <label className="block font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
-                  <Shirt className="w-4 h-4 text-red-400" />
-                  Product Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g., Real Madrid Home 24/25 Player Edition"
-                  value={editingProduct.jerseyName || ""}
-                  onChange={(e) =>
-                    setEditingProduct({
-                      ...editingProduct,
-                      jerseyName: e.target.value,
-                    })
-                  }
-                  className="w-full p-3 rounded-xl border border-slate-800 bg-slate-900 font-medium text-white text-sm focus:ring-2 focus:ring-red-500/40 focus:border-red-500 outline-none"
-                />
-              </div>
-
               {/* Action Buttons */}
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setEditingProduct(null)}
-                  className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold border border-slate-700 text-xs transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-red-900/40 flex items-center gap-2"
-                >
-                  Save Product
-                </button>
+              <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+                <div>
+                  {!isNewProduct && editingProduct.id && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteProduct(editingProduct.id)}
+                      className="px-3.5 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 font-bold border border-rose-800/60 text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Delete
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditingProduct(null)}
+                    className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold border border-slate-700 text-xs transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-6 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-red-950/60 flex items-center gap-2 cursor-pointer"
+                  >
+                    Save Product
+                  </button>
+                </div>
               </div>
             </form>
           </div>
@@ -564,4 +578,3 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
     </div>
   );
 };
-
