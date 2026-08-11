@@ -148,16 +148,34 @@ export default function App() {
     }
   }, [products]);
 
-  // Try fetching products from Supabase table 'SPIDEY' or 'products' for cross-device/multi-user sync
+  // Fetch products from Supabase table ('SPIDEY', 'spidey', 'products') for cross-device/multi-browser sync
   useEffect(() => {
     async function syncProductsFromSupabase() {
       try {
-        const { data: dbData, error } = await supabase.from("SPIDEY").select("*");
-        if (!error && dbData && dbData.length > 0) {
-          // Filter product entries or map items
-          const productRows = dbData.filter((row: any) => row.jerseyName || row.productCode || row.jersey_name);
+        let dbData: any[] | null = null;
+
+        // 1) Try 'SPIDEY'
+        const res1 = await supabase.from("SPIDEY").select("*");
+        if (!res1.error && res1.data && res1.data.length > 0) {
+          dbData = res1.data;
+        } else {
+          // 2) Try 'spidey'
+          const res2 = await supabase.from("spidey").select("*");
+          if (!res2.error && res2.data && res2.data.length > 0) {
+            dbData = res2.data;
+          } else {
+            // 3) Try 'products'
+            const res3 = await supabase.from("products").select("*");
+            if (!res3.error && res3.data && res3.data.length > 0) {
+              dbData = res3.data;
+            }
+          }
+        }
+
+        if (dbData && dbData.length > 0) {
+          const productRows = dbData.filter((row: any) => row.jerseyName || row.productCode || row.jersey_name || row.product_code);
           if (productRows.length > 0) {
-            const formatted: Product[] = productRows.map((item: any) => ({
+            const fetchedProducts: Product[] = productRows.map((item: any) => ({
               id: item.id ? String(item.id) : `p-${Date.now()}`,
               productCode: item.productCode || item.product_code || "SKU-1001",
               teamName: item.teamName || item.team_name || "Team",
@@ -171,7 +189,25 @@ export default function App() {
                 ? item.sizesAvailable || item.sizes_available
                 : ["S", "M", "L", "XL", "XXL"],
             }));
-            setProducts(formatted);
+
+            setProducts((prev) => {
+              // Merge fetched items with existing items by id or productCode
+              const merged = [...prev];
+              fetchedProducts.forEach((fp) => {
+                const idx = merged.findIndex((p) => p.id === fp.id || p.productCode === fp.productCode);
+                if (idx >= 0) {
+                  merged[idx] = fp;
+                } else {
+                  merged.push(fp);
+                }
+              });
+              try {
+                localStorage.setItem(LOCAL_STORAGE_PRODUCTS_KEY, JSON.stringify(merged));
+              } catch (e) {
+                console.error("Localstorage update error:", e);
+              }
+              return merged;
+            });
           }
         }
       } catch (err) {
@@ -179,9 +215,7 @@ export default function App() {
       }
     }
 
-    if (session) {
-      syncProductsFromSupabase();
-    }
+    syncProductsFromSupabase();
   }, [session]);
 
   // Restore sample orders helper

@@ -34,17 +34,56 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Handle image file selection
+  // Handle image file selection with canvas image compression (keeps base64 < 80KB)
   const handleImageFile = (file: File) => {
     if (!file.type.startsWith("image/")) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-      if (e.target?.result && editingProduct) {
-        setEditingProduct({
-          ...editingProduct,
-          imageUrl: e.target.result as string,
-        });
-      }
+      const rawUrl = e.target?.result as string;
+      if (!rawUrl || !editingProduct) return;
+
+      // Compress image via HTML5 Canvas
+      const img = new Image();
+      img.src = rawUrl;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_WIDTH = 600;
+        const MAX_HEIGHT = 600;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height = Math.round((height * MAX_WIDTH) / width);
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width = Math.round((width * MAX_HEIGHT) / height);
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.7);
+          setEditingProduct((prev) =>
+            prev ? { ...prev, imageUrl: compressedDataUrl } : null
+          );
+        } else {
+          setEditingProduct((prev) =>
+            prev ? { ...prev, imageUrl: rawUrl } : null
+          );
+        }
+      };
+      img.onerror = () => {
+        if (editingProduct) {
+          setEditingProduct({ ...editingProduct, imageUrl: rawUrl });
+        }
+      };
     };
     reader.readAsDataURL(file);
   };
@@ -134,25 +173,44 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
 
     // Sync product entry to Supabase database table
     try {
+      const camelPayload = {
+        id: finalProduct.id,
+        productCode: finalProduct.productCode,
+        jerseyName: finalProduct.jerseyName,
+        teamName: finalProduct.teamName,
+        category: finalProduct.category,
+        price: finalProduct.price,
+        stock: finalProduct.stock,
+        lowStockThreshold: finalProduct.lowStockThreshold,
+        imageUrl: finalProduct.imageUrl,
+        sizesAvailable: finalProduct.sizesAvailable,
+      };
+
+      const snakePayload = {
+        id: finalProduct.id,
+        product_code: finalProduct.productCode,
+        jersey_name: finalProduct.jerseyName,
+        team_name: finalProduct.teamName,
+        category: finalProduct.category,
+        price: finalProduct.price,
+        stock: finalProduct.stock,
+        low_stock_threshold: finalProduct.lowStockThreshold,
+        image_url: finalProduct.imageUrl,
+        sizes_available: finalProduct.sizesAvailable,
+      };
+
       supabase
         .from("SPIDEY")
-        .upsert([
-          {
-            id: finalProduct.id,
-            productCode: finalProduct.productCode,
-            jerseyName: finalProduct.jerseyName,
-            teamName: finalProduct.teamName,
-            category: finalProduct.category,
-            price: finalProduct.price,
-            stock: finalProduct.stock,
-            lowStockThreshold: finalProduct.lowStockThreshold,
-            imageUrl: finalProduct.imageUrl,
-            sizesAvailable: finalProduct.sizesAvailable,
-          },
-        ])
-        .then(({ error }) => {
+        .upsert([camelPayload])
+        .then(async ({ error }) => {
           if (error) {
-            console.log("Supabase product upsert notice:", error.message);
+            console.log("Supabase camelCase upsert notice:", error.message);
+            // Fallback to snake_case payload
+            const { error: err2 } = await supabase.from("SPIDEY").upsert([snakePayload]);
+            if (err2) {
+              // Fallback to lowercase table name 'spidey'
+              await supabase.from("spidey").upsert([snakePayload]);
+            }
           }
         });
     } catch (err) {
