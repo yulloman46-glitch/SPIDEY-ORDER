@@ -8,12 +8,95 @@ import { SingleOrderForm } from "./components/SingleOrderForm";
 import { AIChatParser } from "./components/AIChatParser";
 import { ProductCatalog } from "./components/ProductCatalog";
 import { DTFNestingEngine } from "./components/DTFNestingEngine";
+import { SignIn } from "./components/SignIn";
+import { SignUp } from "./components/SignUp";
+import { supabase } from "./supabaseClient";
 
 const LOCAL_STORAGE_ORDERS_KEY = "spidey_jersey_erp_orders_v1";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
-  
+  const [activeTab, setActiveTab] = useState<NavTab>(() => {
+    const path = window.location.pathname;
+    if (path === "/signin" || path === "/login") return "signin";
+    if (path === "/signup") return "signup";
+    return "dashboard";
+  });
+
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [session, setSession] = useState<any>(null);
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [prefilledEmail, setPrefilledEmail] = useState<string>("");
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+
+  // Sync tab with browser URL history
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname;
+      if (path === "/signin" || path === "/login") {
+        setActiveTab("signin");
+      } else if (path === "/signup") {
+        setActiveTab("signup");
+      } else if (path === "/") {
+        setActiveTab("dashboard");
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  // Check active session using supabase.auth.getSession() and listen to changes
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUserEmail(session?.user?.email || null);
+      setSessionChecked(true);
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      setUserEmail(newSession?.user?.email || null);
+      setSessionChecked(true);
+    });
+
+    return () => {
+      authListener?.subscription.unsubscribe();
+    };
+  }, []);
+
+  // Protect private pages with supabase.auth.getSession(): if no session, redirect to /signin
+  useEffect(() => {
+    if (!sessionChecked) return;
+
+    const isPublicTab = activeTab === "signin" || activeTab === "signup";
+    if (!session && !isPublicTab) {
+      setActiveTab("signin");
+      window.history.pushState({}, "", "/signin");
+    }
+  }, [session, sessionChecked, activeTab]);
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setUserEmail(null);
+    setAuthNotice(null);
+    window.history.pushState({}, "", "/signin");
+    setActiveTab("signin");
+  };
+
+  const handleAuthSuccess = () => {
+    setAuthNotice(null);
+    window.history.pushState({}, "", "/");
+    setActiveTab("dashboard");
+  };
+
+  const handleNavigateToSignIn = (email?: string, message?: string) => {
+    if (email) setPrefilledEmail(email);
+    if (message) setAuthNotice(message);
+    setActiveTab("signin");
+    window.history.pushState({}, "", "/signin");
+  };
+
   // Initialize orders state from LocalStorage if present, else fallback to initialOrders
   const [orders, setOrders] = useState<ERPOrder[]>(() => {
     try {
@@ -66,13 +149,40 @@ export default function App() {
       {/* Header Navigation */}
       <Navigation
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={(tab) => {
+          setActiveTab(tab);
+          if (tab === "signin") window.history.pushState({}, "", "/signin");
+          else if (tab === "signup") window.history.pushState({}, "", "/signup");
+          else if (tab === "dashboard") window.history.pushState({}, "", "/");
+        }}
         orderCount={orders.length}
         lowStockCount={lowStockCount}
+        userEmail={userEmail}
+        onSignOut={handleSignOut}
       />
 
       {/* Main Bento Grid View Container */}
       <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {activeTab === "signin" && (
+          <SignIn
+            initialEmail={prefilledEmail}
+            infoNotice={authNotice}
+            onSuccess={handleAuthSuccess}
+            onNavigateSignUp={() => {
+              setAuthNotice(null);
+              setActiveTab("signup");
+              window.history.pushState({}, "", "/signup");
+            }}
+          />
+        )}
+
+        {activeTab === "signup" && (
+          <SignUp
+            onSuccess={handleAuthSuccess}
+            onNavigateSignIn={handleNavigateToSignIn}
+          />
+        )}
+
         {activeTab === "dashboard" && (
           <Dashboard
             orders={orders}
@@ -114,3 +224,4 @@ export default function App() {
     </div>
   );
 }
+
