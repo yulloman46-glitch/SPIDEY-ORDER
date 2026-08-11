@@ -1,0 +1,6 @@
+{
+  "name": "Spidey Jersey ERP",
+  "description": "Complete ERP system for custom soccer jerseys with order management, Steadfast Courier integration, AI chat order parsing, product inventory, and DTF 39\" roll nesting & export engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
