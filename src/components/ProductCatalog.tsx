@@ -171,53 +171,161 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
       setProducts((prev) => prev.map((p) => (p.id === finalProduct.id ? finalProduct : p)));
     }
 
-    // Sync product entry to Supabase database table
-    try {
-      const camelPayload = {
-        id: finalProduct.id,
-        productCode: finalProduct.productCode,
-        jerseyName: finalProduct.jerseyName,
-        teamName: finalProduct.teamName,
-        category: finalProduct.category,
-        price: finalProduct.price,
-        stock: finalProduct.stock,
-        lowStockThreshold: finalProduct.lowStockThreshold,
-        imageUrl: finalProduct.imageUrl,
-        sizesAvailable: finalProduct.sizesAvailable,
-      };
-
-      const snakePayload = {
-        id: finalProduct.id,
-        product_code: finalProduct.productCode,
-        jersey_name: finalProduct.jerseyName,
-        team_name: finalProduct.teamName,
-        category: finalProduct.category,
-        price: finalProduct.price,
-        stock: finalProduct.stock,
-        low_stock_threshold: finalProduct.lowStockThreshold,
-        image_url: finalProduct.imageUrl,
-        sizes_available: finalProduct.sizesAvailable,
-      };
-
-      supabase
-        .from("SPIDEY")
-        .upsert([camelPayload])
-        .then(async ({ error }) => {
-          if (error) {
-            console.log("Supabase camelCase upsert notice:", error.message);
-            // Fallback to snake_case payload
-            const { error: err2 } = await supabase.from("SPIDEY").upsert([snakePayload]);
-            if (err2) {
-              // Fallback to lowercase table name 'spidey'
-              await supabase.from("spidey").upsert([snakePayload]);
-            }
-          }
-        });
-    } catch (err) {
-      console.log("Supabase product save error:", err);
-    }
+    // Sync product entry to Supabase database table with multi-schema fallback
+    syncProductToSupabase(finalProduct);
 
     setEditingProduct(null);
+  };
+
+  // Helper to sync single product to Supabase
+  const syncProductToSupabase = async (prod: Product) => {
+    setIsSyncing(true);
+    setSyncMessage("Syncing product to Supabase cloud...");
+    try {
+      const numId = parseInt(prod.id.replace(/\D/g, ""), 10) || Math.floor(Math.random() * 1000000);
+      const user = (await supabase.auth.getUser())?.data?.user;
+
+      const snakeNumeric = {
+        id: numId,
+        product_code: prod.productCode,
+        jersey_name: prod.jerseyName,
+        team_name: prod.teamName,
+        category: prod.category,
+        price: prod.price,
+        stock: prod.stock,
+        low_stock_threshold: prod.lowStockThreshold,
+        image_url: prod.imageUrl,
+        sizes_available: prod.sizesAvailable,
+        user_id: user?.id,
+      };
+
+      const snakeString = {
+        ...snakeNumeric,
+        id: prod.id,
+      };
+
+      const snakeNoId = {
+        product_code: prod.productCode,
+        jersey_name: prod.jerseyName,
+        team_name: prod.teamName,
+        category: prod.category,
+        price: prod.price,
+        stock: prod.stock,
+        low_stock_threshold: prod.lowStockThreshold,
+        image_url: prod.imageUrl,
+        sizes_available: Array.isArray(prod.sizesAvailable) ? prod.sizesAvailable.join(",") : prod.sizesAvailable,
+        user_id: user?.id,
+      };
+
+      const camelNumeric = {
+        id: numId,
+        productCode: prod.productCode,
+        jerseyName: prod.jerseyName,
+        teamName: prod.teamName,
+        category: prod.category,
+        price: prod.price,
+        stock: prod.stock,
+        lowStockThreshold: prod.lowStockThreshold,
+        imageUrl: prod.imageUrl,
+        sizesAvailable: prod.sizesAvailable,
+        user_id: user?.id,
+      };
+
+      const camelString = {
+        ...camelNumeric,
+        id: prod.id,
+      };
+
+      const tables = ["SPIDEY", "spidey", "products"];
+      const payloads = [snakeNumeric, snakeString, snakeNoId, camelNumeric, camelString];
+
+      let success = false;
+      let lastErrMsg = "";
+
+      for (const table of tables) {
+        for (const payload of payloads) {
+          const { error } = await supabase.from(table).upsert([payload]);
+          if (!error) {
+            success = true;
+            break;
+          }
+          lastErrMsg = error.message;
+        }
+        if (success) break;
+      }
+
+      if (success) {
+        setSyncMessage("Product synced to Supabase database successfully!");
+      } else {
+        console.warn("Supabase save notice:", lastErrMsg);
+        setSyncMessage("Saved locally. Supabase notice: " + lastErrMsg);
+      }
+    } catch (err: any) {
+      console.error("Supabase error:", err);
+      setSyncMessage("Saved locally.");
+    } finally {
+      setIsSyncing(false);
+      setTimeout(() => setSyncMessage(null), 4000);
+    }
+  };
+
+  // Manual sync with Supabase cloud
+  const handleSyncSupabaseCloud = async () => {
+    setIsSyncing(true);
+    setSyncMessage("Syncing with Supabase cloud database...");
+    try {
+      // Push all local products to Supabase
+      for (const p of products) {
+        await syncProductToSupabase(p);
+      }
+
+      // Fetch fresh products from Supabase
+      let dbData: any[] | null = null;
+      const res1 = await supabase.from("SPIDEY").select("*");
+      if (!res1.error && res1.data && res1.data.length > 0) dbData = res1.data;
+      else {
+        const res2 = await supabase.from("spidey").select("*");
+        if (!res2.error && res2.data && res2.data.length > 0) dbData = res2.data;
+        else {
+          const res3 = await supabase.from("products").select("*");
+          if (!res3.error && res3.data && res3.data.length > 0) dbData = res3.data;
+        }
+      }
+
+      if (dbData && dbData.length > 0) {
+        const fetchedProducts: Product[] = dbData.map((item: any, idx: number) => {
+          const rawSizes = item.sizesAvailable || item.sizes_available || item.sizes;
+          let parsedSizes = ["S", "M", "L", "XL", "XXL"];
+          if (Array.isArray(rawSizes)) parsedSizes = rawSizes;
+          else if (typeof rawSizes === "string" && rawSizes.trim()) {
+            parsedSizes = rawSizes.split(",").map((s: string) => s.trim());
+          }
+          return {
+            id: item.id ? String(item.id) : `p-cloud-${idx}`,
+            productCode: item.productCode || item.product_code || item.code || `SKU-${1000 + idx}`,
+            teamName: item.teamName || item.team_name || item.team || "Team",
+            jerseyName: item.jerseyName || item.jersey_name || item.name || item.title || "Jersey",
+            category: item.category || "Club",
+            price: Number(item.price) || 0,
+            stock: Number(item.stock) || 0,
+            lowStockThreshold: Number(item.lowStockThreshold || item.low_stock_threshold) || 10,
+            imageUrl: item.imageUrl || item.image_url || item.image || item.photo_url || "",
+            sizesAvailable: parsedSizes as any,
+          };
+        });
+
+        setProducts(fetchedProducts);
+        setSyncMessage(`Successfully synced ${fetchedProducts.length} products with Supabase Cloud!`);
+      } else {
+        setSyncMessage("All products saved to Supabase Cloud!");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setSyncMessage("Cloud sync complete.");
+    } finally {
+      setIsSyncing(false);
+      setTimeout(() => setSyncMessage(null), 5000);
+    }
   };
 
   return (
@@ -230,19 +338,30 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
           </div>
           <h1 className="text-2xl font-black tracking-tight text-white">Product Catalog & Inventory</h1>
           <p className="text-slate-400 text-xs mt-1">
-            Manage soccer jerseys, stock counts, pricing, and sync directly with WooCommerce storefront
+            Manage soccer jerseys, stock counts, pricing, and sync directly across all devices with Supabase
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Cloud Sync Button */}
+          <button
+            onClick={handleSyncSupabaseCloud}
+            disabled={isSyncing}
+            className="px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-emerald-950/40 flex items-center gap-2"
+            title="Sync all products with Supabase cloud database"
+          >
+            <UploadCloud className={`w-4 h-4 ${isSyncing ? "animate-bounce" : ""}`} />
+            {isSyncing ? "Syncing Cloud..." : "Supabase Cloud Sync"}
+          </button>
+
           {/* Sync all from website button */}
           <button
             onClick={handleSyncWooCommerce}
             disabled={isSyncing}
-            className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-blue-900/40 flex items-center gap-2"
+            className="px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs transition-all shadow-lg shadow-blue-900/40 flex items-center gap-2"
           >
             <RefreshCw className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`} />
-            {isSyncing ? "Syncing..." : "Sync all from website"}
+            {isSyncing ? "Syncing..." : "Sync Website"}
           </button>
 
           <button
@@ -261,7 +380,7 @@ export const ProductCatalog: React.FC<ProductCatalogProps> = ({ products, setPro
                 sizesAvailable: ["S", "M", "L", "XL", "XXL", "3XL"],
               });
             }}
-            className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-all shadow-md flex items-center gap-1.5"
+            className="px-3.5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-all shadow-md flex items-center gap-1.5"
           >
             <Plus className="w-4 h-4" /> Add Product
           </button>

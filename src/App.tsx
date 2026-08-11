@@ -173,30 +173,39 @@ export default function App() {
         }
 
         if (dbData && dbData.length > 0) {
-          const productRows = dbData.filter((row: any) => row.jerseyName || row.productCode || row.jersey_name || row.product_code);
+          const productRows = dbData.filter((row: any) => row && (row.jerseyName || row.productCode || row.jersey_name || row.product_code || row.name || row.title || row.team || row.id));
           if (productRows.length > 0) {
-            const fetchedProducts: Product[] = productRows.map((item: any) => ({
-              id: item.id ? String(item.id) : `p-${Date.now()}`,
-              productCode: item.productCode || item.product_code || "SKU-1001",
-              teamName: item.teamName || item.team_name || "Team",
-              jerseyName: item.jerseyName || item.jersey_name || "Jersey",
-              category: item.category || "Club",
-              price: Number(item.price) || 0,
-              stock: Number(item.stock) || 0,
-              lowStockThreshold: Number(item.lowStockThreshold || item.low_stock_threshold) || 10,
-              imageUrl: item.imageUrl || item.image_url || "",
-              sizesAvailable: Array.isArray(item.sizesAvailable || item.sizes_available)
-                ? item.sizesAvailable || item.sizes_available
-                : ["S", "M", "L", "XL", "XXL"],
-            }));
+            const fetchedProducts: Product[] = productRows.map((item: any, idx: number) => {
+              const rawSizes = item.sizesAvailable || item.sizes_available || item.sizes;
+              let parsedSizes = ["S", "M", "L", "XL", "XXL"];
+              if (Array.isArray(rawSizes)) {
+                parsedSizes = rawSizes;
+              } else if (typeof rawSizes === "string" && rawSizes.trim()) {
+                parsedSizes = rawSizes.split(",").map((s: string) => s.trim());
+              }
+
+              return {
+                id: item.id ? String(item.id) : `p-cloud-${idx}-${Date.now()}`,
+                productCode: item.productCode || item.product_code || item.code || `SKU-${1000 + idx}`,
+                teamName: item.teamName || item.team_name || item.team || "Team",
+                jerseyName: item.jerseyName || item.jersey_name || item.name || item.title || "Jersey",
+                category: item.category || "Club",
+                price: Number(item.price) || 0,
+                stock: Number(item.stock) || 0,
+                lowStockThreshold: Number(item.lowStockThreshold || item.low_stock_threshold) || 10,
+                imageUrl: item.imageUrl || item.image_url || item.image || item.photo_url || "",
+                sizesAvailable: parsedSizes as any,
+              };
+            });
 
             setProducts((prev) => {
-              // Merge fetched items with existing items by id or productCode
               const merged = [...prev];
               fetchedProducts.forEach((fp) => {
-                const idx = merged.findIndex((p) => p.id === fp.id || p.productCode === fp.productCode);
-                if (idx >= 0) {
-                  merged[idx] = fp;
+                const matchIndex = merged.findIndex(
+                  (p) => p.id === fp.id || (p.productCode && p.productCode === fp.productCode)
+                );
+                if (matchIndex >= 0) {
+                  merged[matchIndex] = fp;
                 } else {
                   merged.push(fp);
                 }
@@ -204,7 +213,7 @@ export default function App() {
               try {
                 localStorage.setItem(LOCAL_STORAGE_PRODUCTS_KEY, JSON.stringify(merged));
               } catch (e) {
-                console.error("Localstorage update error:", e);
+                console.error("LocalStorage save error:", e);
               }
               return merged;
             });
